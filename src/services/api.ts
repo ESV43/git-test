@@ -412,48 +412,83 @@ ${script}`;
     return scenes;
   }
 
-  private buildImagePrompt(basePrompt: string, config: ComicConfig, characters?: Character[]): string {
+  buildImagePrompt(basePrompt: string, config: ComicConfig, characters?: Character[]): string {
     let prompt = basePrompt;
-    
-    // Add style modifiers
-    const styleModifiers = {
-      cyberpunk: 'cyberpunk style, neon lights, futuristic city, dark atmosphere, gritty, high-tech low-life',
-      '3d': '3D rendered, CGI, octane render, unreal engine, volumetric lighting, detailed textures, realistic materials',
-      photorealistic: 'photograph, photorealistic, 8k, DSLR, sharp focus, high detail, cinematic lighting',
-      manga: 'manga style, black and white, screentones, sharp lines, dynamic composition, japanese comic art',
-      western: 'western comic book style, bold colors, action lines, superhero comic art',
-      'golden-age': 'golden age comics style, vintage, retro, 1940s comic art, pulpy',
-      modern: 'modern comic book style, detailed pencils and inks, digital coloring, cinematic',
-      anime: 'anime film screenshot, Studio Ghibli, Makoto Shinkai, cel-shaded, vibrant colors',
-      noir: 'film noir style, black and white, high contrast, dramatic shadows, moody, 1950s detective movie',
-      'pop-art': 'pop art style, Andy Warhol, Roy Lichtenstein, bold colors, ben-day dots, graphic',
-      'pixel-art': '8-bit pixel art, retro gaming aesthetic, pixelated, sprite art'
-    };
-    
-    if (styleModifiers[config.style]) {
-      prompt = `(${styleModifiers[config.style]}:1.4), ${prompt}`;
-    }
-    
-    // Add quality and format modifiers
-    prompt += ', comic book panel, high quality, detailed art';
-    
-    if (config.promptBooster) {
-      prompt += ', masterpiece, best quality, ultra detailed, cinematic composition';
-    }
-
-    if (characters && characters.length > 0) {
-      const characterContext = characters.map(c => {
-        if (basePrompt.toLowerCase().includes(c.name.toLowerCase())) {
-          return `${c.name} appears as described: ${c.description || 'no description'}.`;
+  
+    const styleModifiers: { [key: string]: { positive: string, negative?: string } } = {
+        cyberpunk: {
+            positive: 'cyberpunk style, neon lights, futuristic city, dark atmosphere, gritty, high-tech low-life, Blade Runner aesthetic, cinematic lighting',
+            negative: 'daytime, bright, clean, minimalist'
+        },
+        '3d': {
+            positive: '3D rendered, CGI, octane render, unreal engine, volumetric lighting, detailed textures, realistic materials, trending on artstation',
+            negative: '2D, flat, drawing, painting'
+        },
+        photorealistic: {
+            positive: 'photograph, photorealistic, 8k, DSLR, sharp focus, high detail, cinematic lighting, f/1.8, 85mm lens',
+            negative: 'drawing, painting, illustration, cartoon, 3d render, anime'
+        },
+        manga: {
+            positive: 'manga style, black and white, screentones, sharp lines, dynamic composition, japanese comic art, detailed ink drawing',
+            negative: 'color, photorealistic, 3d, painting'
+        },
+        western: {
+            positive: 'western comic book style, bold colors, action lines, superhero comic art, marvel comics, dc comics, dynamic poses',
+            negative: 'black and white, manga, realistic'
+        },
+        'golden-age': {
+            positive: 'golden age comics style, vintage, retro, 1940s comic art, pulpy, four-color process, aged paper texture',
+            negative: 'modern, digital art, clean lines'
+        },
+        modern: {
+            positive: 'modern comic book style, detailed pencils and inks, digital coloring, cinematic, vibrant, sharp lines',
+            negative: 'vintage, black and white, sketch'
+        },
+        anime: {
+            positive: 'anime film screenshot, Studio Ghibli style, Makoto Shinkai style, cel-shaded, vibrant colors, detailed background',
+            negative: 'realistic, 3d, western cartoon'
+        },
+        noir: {
+            positive: 'film noir style, black and white, high contrast, dramatic shadows, moody, 1950s detective movie, dutch angle',
+            negative: 'color, bright, cheerful'
+        },
+        'pop-art': {
+            positive: 'pop art style, Andy Warhol, Roy Lichtenstein, bold colors, ben-day dots, graphic, thick outlines',
+            negative: 'realistic, subtle colors, gradients'
+        },
+        'pixel-art': {
+            positive: '16-bit pixel art, retro gaming aesthetic, pixelated, sprite art, detailed, vibrant color palette',
+            negative: 'smooth, vector, realistic, high resolution'
         }
-        return null;
-      }).filter(Boolean).join(' ');
-
-      if (characterContext) {
-        prompt += ` | Character details: ${characterContext}`;
-      }
+    };
+  
+    if (styleModifiers[config.style]) {
+        const style = styleModifiers[config.style];
+        prompt = `(${style.positive}:1.4), ${prompt}`;
+        if (style.negative) {
+            prompt += ` --no ${style.negative}`;
+        }
     }
-    
+  
+    prompt += ', comic book panel, high quality, detailed art';
+  
+    if (config.promptBooster) {
+        prompt += ', masterpiece, best quality, ultra detailed, cinematic composition';
+    }
+  
+    if (characters && characters.length > 0) {
+        const characterContext = characters.map(c => {
+            if (basePrompt.toLowerCase().includes(c.name.toLowerCase())) {
+                return `${c.name} appears as described: ${c.description || 'no description'}.`;
+            }
+            return null;
+        }).filter(Boolean).join(' ');
+  
+        if (characterContext) {
+            prompt += ` | Character details: ${characterContext}`;
+        }
+    }
+  
     return prompt;
   }
 
