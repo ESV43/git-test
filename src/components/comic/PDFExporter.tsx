@@ -1,15 +1,19 @@
 import { ComicPanel, ComicConfig, ExportOptions } from "@/types/comic";
+import { jsPDF } from 'jspdf';
 
-// PDF export functionality
+// A type to represent a panel along with its pre-fetched image data
+type PanelWithImageData = {
+  dataUrl: string | null;
+  panel: ComicPanel;
+};
+
+// PDF export functionality, now accepting pre-fetched data
 export class PDFExporter {
   static async exportToPDF(
-    panels: ComicPanel[], 
-    config: ComicConfig, 
+    imageData: PanelWithImageData[],
+    config: ComicConfig,
     options: ExportOptions
   ): Promise<Blob> {
-    // Use jsPDF for PDF generation
-    const { jsPDF } = await import('jspdf');
-    
     const pdf = new jsPDF({
       orientation: config.aspectRatio === '3:4' ? 'portrait' : 'landscape',
       unit: 'mm',
@@ -23,60 +27,46 @@ export class PDFExporter {
     let currentPage = 0;
     const panelsPerPage = config.panelCount;
     
-    for (let i = 0; i < panels.length; i += panelsPerPage) {
+    for (let i = 0; i < imageData.length; i += panelsPerPage) {
       if (currentPage > 0) {
         pdf.addPage();
       }
       
-      const pagePanels = panels.slice(i, i + panelsPerPage);
+      const pageImageData = imageData.slice(i, i + panelsPerPage);
       const rows = Math.ceil(Math.sqrt(panelsPerPage));
       const cols = Math.ceil(panelsPerPage / rows);
       
       const panelWidth = (pageWidth - margin * 2 - (cols - 1) * 5) / cols;
       const panelHeight = (pageHeight - margin * 2 - (rows - 1) * 5) / rows;
       
-      for (let j = 0; j < pagePanels.length; j++) {
-        const panel = pagePanels[j];
+      for (let j = 0; j < pageImageData.length; j++) {
+        const { dataUrl, panel } = pageImageData[j];
         const row = Math.floor(j / cols);
         const col = j % cols;
         
         const x = margin + col * (panelWidth + 5);
         const y = margin + row * (panelHeight + 5);
         
-        if (panel.imageUrl) {
+        if (dataUrl) {
           try {
-            // Add image to PDF with reduced quality for smaller file size
-            const quality = options.quality === 'high' ? 0.9 : options.quality === 'medium' ? 0.7 : 0.5;
-            
-            if (panel.imageUrl.startsWith('data:')) {
-              pdf.addImage(panel.imageUrl, 'JPEG', x, y, panelWidth, panelHeight, '', 'MEDIUM');
-            } else {
-              // For external URLs, we'd need to fetch and convert to base64
-              const canvas = document.createElement('canvas');
-              const ctx = canvas.getContext('2d');
-              const img = new Image();
-              
-              await new Promise((resolve, reject) => {
-                img.crossOrigin = 'anonymous';
-                img.onload = () => {
-                  canvas.width = img.width;
-                  canvas.height = img.height;
-                  ctx?.drawImage(img, 0, 0);
-                  const dataUrl = canvas.toDataURL('image/jpeg', quality);
-                  pdf.addImage(dataUrl, 'JPEG', x, y, panelWidth, panelHeight);
-                  resolve(void 0);
-                };
-                img.onerror = reject;
-                img.src = panel.imageUrl;
-              });
-            }
+            // Image is already a data URL, so we can add it directly.
+            pdf.addImage(dataUrl, 'JPEG', x, y, panelWidth, panelHeight, '', 'MEDIUM');
           } catch (error) {
             console.error('Failed to add image to PDF:', error);
-            // Add placeholder rectangle
-            pdf.rect(x, y, panelWidth, panelHeight);
+            // Add placeholder rectangle on error
+            pdf.rect(x, y, panelWidth, panelHeight, 'F');
+            pdf.setTextColor(255, 0, 0);
             pdf.setFontSize(8);
-            pdf.text('Image failed to load', x + 2, y + 10);
+            pdf.text('Image Error', x + 2, y + 10);
           }
+        } else {
+            // If dataUrl is null (fetch failed), draw a placeholder
+            pdf.setDrawColor(50, 50, 50);
+            pdf.setFillColor(20, 20, 20);
+            pdf.rect(x, y, panelWidth, panelHeight, 'FD');
+            pdf.setTextColor(255, 255, 255);
+            pdf.setFontSize(8);
+            pdf.text('Image Not Found', x + panelWidth / 2, y + panelHeight / 2, { align: 'center' });
         }
         
         // Add dialogue if enabled
@@ -84,27 +74,23 @@ export class PDFExporter {
             const bubblePadding = 2;
             pdf.setFontSize(8);
 
-            // Split text to fit in the bubble
             const lines = pdf.splitTextToSize(panel.dialogue, panelWidth - 10 - (bubblePadding * 2));
             const textHeight = lines.length * 3.5;
 
-            // Bubble position
             const bubbleX = x + 5;
             const bubbleHeight = textHeight + (bubblePadding * 2);
             const bubbleY = y + panelHeight - bubbleHeight - 5;
 
-            // Draw bubble (white rounded rectangle with black border)
             pdf.setFillColor(255, 255, 255);
             pdf.setDrawColor(0, 0, 0);
             pdf.setLineWidth(0.5);
             pdf.roundedRect(bubbleX, bubbleY, panelWidth - 10, bubbleHeight, 3, 3, 'FD');
 
             pdf.setTextColor(0, 0, 0);
-            pdf.text(lines, bubbleX + bubblePadding, bubbleY + bubbleHeight / 2, { baseline: 'middle' });
-          }
+            pdf.text(lines, bubbleX + bubblePadding, bubbleY + bubblePadding + 2);
+        }
       }
       
-      // Add page number
       pdf.setFontSize(8);
       pdf.setTextColor(128, 128, 128);
       pdf.text(`Page ${currentPage + 1}`, pageWidth - 20, pageHeight - 5);
@@ -112,14 +98,13 @@ export class PDFExporter {
       currentPage++;
     }
     
-    // Add watermark if enabled
     if (options.watermark) {
       const totalPages = pdf.getNumberOfPages();
       for (let page = 1; page <= totalPages; page++) {
         pdf.setPage(page);
-        pdf.setFontSize(12);
-        pdf.setTextColor(200, 200, 200);
-        pdf.text('Generated by AI Comic Creator', pageWidth - 60, 10);
+        pdf.setFontSize(10);
+        pdf.setTextColor(150);
+        pdf.text('Generated by ComicAI', pageWidth / 2, pageHeight - 5, { align: 'center' });
       }
     }
     
