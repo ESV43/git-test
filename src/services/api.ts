@@ -1,17 +1,20 @@
-import { ComicConfig, Character, ComicPanel } from "@/types/comic";
+import { ComicConfig, Character, ComicPanel, APIKeys } from "@/types/comic";
 import { GoogleGenAI, Modality } from '@google/genai';
 
 // API service for comic generation
 export class ComicGeneratorAPI {
-  private apiKeys: {
-    gemini?: string;
-    huggingface?: string;
-  } = {};
+  private apiKeys: APIKeys = {};
+  private geminiKeyIndex = 0;
 
-  setAPIKeys(keys: { gemini?: string; huggingface?: string }) {
+  setAPIKeys(keys: APIKeys) {
     this.apiKeys = { ...this.apiKeys, ...keys };
+    this.geminiKeyIndex = 0; // Reset index when keys are updated
     // Store in localStorage for persistence
     localStorage.setItem('comic-api-keys', JSON.stringify(keys));
+  }
+
+  getAPIKeys(): APIKeys {
+    return this.apiKeys;
   }
 
   // Load API keys from localStorage
@@ -20,68 +23,77 @@ export class ComicGeneratorAPI {
       const stored = localStorage.getItem('comic-api-keys');
       if (stored) {
         this.apiKeys = JSON.parse(stored);
+        this.geminiKeyIndex = 0;
       }
     } catch (error) {
       console.warn('Failed to load stored API keys:', error);
     }
   }
 
+  private getNextGeminiKey(): string | null {
+    if (!this.apiKeys.gemini || this.apiKeys.gemini.length === 0) {
+      return null;
+    }
+    const key = this.apiKeys.gemini[this.geminiKeyIndex];
+    this.geminiKeyIndex = (this.geminiKeyIndex + 1) % this.apiKeys.gemini.length;
+    return key;
+  }
+
   // Check if required API key is available for selected model
   hasRequiredAPIKey(model: string): boolean {
-    if (model.startsWith('gemini-2.') || model.startsWith('gemini-1.') || model === 'gemini') {
-      return !!this.apiKeys.gemini;
+    if (model.startsWith('gemini')) {
+      return !!this.apiKeys.gemini && this.apiKeys.gemini.length > 0;
     }
     if (model === 'huggingface') {
-      return !!this.apiKeys.huggingface;
+      return !!this.apiKeys.huggingface && this.apiKeys.huggingface.length > 0;
     }
     // Other models don't require API keys
     return true;
   }
 
-  private failureCount = new Map<string, number>();
-  private readonly MAX_FAILURES = 3;
-
   // Dynamic image generation based on selected AI model with auto-fallback
-  async generateImage(prompt: string, config: ComicConfig): Promise<string> {
-    const enhancedPrompt = this.buildImagePrompt(prompt, config);
+  async generateImage(prompt: string, config: ComicConfig, characters?: Character[]): Promise<string> {
+    const enhancedPrompt = this.buildImagePrompt(prompt, config, characters);
     const currentModel = config.imageAI;
     
     try {
       // Route to appropriate image generation service
       if (currentModel.startsWith('gemini')) {
-        // Block Gemini models if no API key is available
-        if (!this.apiKeys.gemini) {
+        const numKeys = this.apiKeys.gemini?.length || 0;
+        if (numKeys === 0) {
           throw new Error(`Gemini API key is required for ${currentModel}. Please configure your API key.`);
         }
-        const result = await this.generateImageWithGemini(enhancedPrompt, config);
-        this.failureCount.set(currentModel, 0); // Reset failure count on success
-        return result;
+
+        for (let i = 0; i < numKeys; i++) {
+            const apiKey = this.getNextGeminiKey();
+            if (!apiKey) continue; // Should not happen if numKeys > 0
+
+            try {
+                const result = await this.generateImageWithGemini(enhancedPrompt, config, apiKey, characters);
+                return result; // Success, so return
+            } catch (error) {
+                console.error(`Gemini generation failed with key index ${this.geminiKeyIndex === 0 ? numKeys - 1 : this.geminiKeyIndex - 1}:`, error);
+                if (i === numKeys - 1) {
+                    // Last key failed, re-throw the error
+                    throw error;
+                }
+                // Otherwise, the loop will continue with the next key
+            }
+        }
+        throw new Error('All Gemini API keys failed.');
       } else if (currentModel === 'huggingface') {
         if (!this.apiKeys.huggingface) {
           throw new Error('HuggingFace API key is required. Please configure your API key.');
         }
         const result = await this.generateImageWithHuggingFace(enhancedPrompt);
-        this.failureCount.set(currentModel, 0);
         return result;
       } else {
         // Pollinations.ai models (flux, kontext, turbo, gptimage, pollinations)
         const result = await this.generateImageWithPollinations(enhancedPrompt, config);
-        this.failureCount.set(currentModel, 0);
         return result;
       }
     } catch (error) {
       console.error(`Image generation failed with ${currentModel}:`, error);
-      
-      // Track failures and fallback to Pollinations if needed
-      const failures = this.failureCount.get(currentModel) || 0;
-      this.failureCount.set(currentModel, failures + 1);
-      
-      if (failures >= this.MAX_FAILURES && currentModel !== 'flux') {
-        console.log(`${currentModel} failed ${this.MAX_FAILURES} times, falling back to Pollinations Flux`);
-        const fallbackConfig = { ...config, imageAI: 'flux' as any };
-        return await this.generateImageWithPollinations(enhancedPrompt, fallbackConfig);
-      }
-      
       throw error;
     }
   }
@@ -112,14 +124,10 @@ export class ComicGeneratorAPI {
   }
 
   // Gemini image generation using Google GenAI
-  private async generateImageWithGemini(prompt: string, config: ComicConfig): Promise<string> {
-    if (!this.apiKeys.gemini) {
-      throw new Error('Gemini API key not set. Please configure your API key.');
-    }
+  private async generateImageWithGemini(prompt: string, config: ComicConfig, apiKey: string, characters?: Character[]): Promise<string> {
 
     try {
-      const genAI = new GoogleGenAI({ apiKey: this.apiKeys.gemini });
-      
+      const genAI = new GoogleGenAI({ apiKey });
       // Create a chat for image generation
       const chat = genAI.chats.create({
         model: 'gemini-2.0-flash-preview-image-generation',
@@ -129,11 +137,22 @@ export class ComicGeneratorAPI {
         history: [],
       });
 
-      const result = await chat.sendMessageStream({
-        message: `Generate an image: ${prompt}. Style: comic book panel, high quality, detailed art.`
-      });
+      const messageParts: (string | { inlineData: { data: string, mimeType: string }})[] = [{ text: prompt }];
+
+      if (characters && characters.length > 0) {
+        for (const char of characters) {
+          if (prompt.toLowerCase().includes(char.name.toLowerCase()) && (char.images.length > 0 || (char.previewImages && char.previewImages.length > 0))) {
+            const refImages = (char.previewImages && char.previewImages.length > 0) ? char.previewImages : char.images;
+            for (const imgDataUrl of refImages) {
+              const base64Data = imgDataUrl.split(',')[1];
+              messageParts.push({ inlineData: { data: base64Data, mimeType: 'image/png' } });
+            }
+          }
+        }
+      }
 
       // Extract image from response stream
+      const result = await chat.sendMessageStream({ message: messageParts });
       for await (const chunk of result) {
         for (const candidate of chunk.candidates) {
           for (const part of candidate.content.parts ?? []) {
@@ -162,15 +181,20 @@ export class ComicGeneratorAPI {
     }
 
     try {
-      const prompt = `Analyze the following story and convert it into a comic script format. Break it down into ${config.pageCount} pages with ${config.panelCount} panels each. For each panel, provide:
-1. Scene description (visual details for image generation)
-2. Character dialogue (if any)
-3. Panel composition and camera angle
+      const prompt = `You are a professional comic book scriptwriter. Your task is to adapt the following story into a detailed comic script.
 
-Story to analyze:
-${story}
+**Instructions:**
+1.  Divide the story into ${config.pageCount} pages.
+2.  Each page must contain exactly ${config.panelCount} panels.
+3.  For each panel, provide the following details, clearly labeled:
+    *   **PAGE:** The page number.
+    *   **PANEL:** The panel number on that page.
+    *   **SCENE:** A detailed description of the setting, characters, and their actions. Be very descriptive for the image generation AI. Include camera angles (e.g., "Close-up on," "Wide shot of," "Over-the-shoulder view").
+    *   **DIALOGUE:** Any dialogue spoken by characters in that panel. Format it as "CHARACTER NAME: Dialogue text." If there's no dialogue, write "DIALOGUE: (none)".
 
-Please format the output as a comic script with clear panel descriptions that can be used for image generation. Focus on visual storytelling and make sure each panel advances the narrative. Style should match: ${config.style}`;
+**Visual Style:** The overall tone and visuals should match a "${config.style}" comic book.
+
+**Story to Adapt:**\n---\n${story}\n---\n\nProduce the complete script following these instructions precisely.`;
 
       if (config.textAI.startsWith('gemini')) {
         return await this.callGeminiTextAPI(prompt);
@@ -186,14 +210,14 @@ Please format the output as a comic script with clear panel descriptions that ca
 
   // Gemini text API call
   private async callGeminiTextAPI(prompt: string): Promise<string> {
-    if (!this.apiKeys.gemini) {
-      throw new Error('Gemini API key not set');
-    }
+    const apiKey = this.getNextGeminiKey();
+    if (!apiKey) throw new Error('Gemini API key not set');
 
     try {
-      const genAI = new GoogleGenAI({ apiKey: this.apiKeys.gemini });
+      const genAI = new GoogleGenAI({ apiKey });
       
       // Create a chat for text generation
+      // Use a capable model for this task
       const chat = genAI.chats.create({
         model: 'gemini-2.0-flash-preview',
         history: [],
@@ -263,8 +287,7 @@ ${script}`;
         panels.push({
           id: `page-${pageNumber}-panel-${panelNumber}`,
           sceneDescription: scene.description,
-          dialogue: scene.dialogue,
-          promptUsed: this.buildImagePrompt(scene.description, config)
+          dialogue: scene.dialogue
         });
       }
       
@@ -290,21 +313,14 @@ ${script}`;
       const panelNumber = (i % config.panelCount) + 1;
       
       onProgress?.(i + 1, panels.length, `Generating page ${pageNumber}, panel ${panelNumber} using ${config.imageAI}...`);
-      
       try {
-        // Add character context to the prompt
-        const enhancedPrompt = this.addCharacterContext(
-          panel.sceneDescription,
-          characters,
-          config
-        );
-        
-        const imageUrl = await this.generateImage(enhancedPrompt, config);
+        const imageUrl = await this.generateImage(panel.sceneDescription, config, characters);
+        const promptUsed = this.buildImagePrompt(panel.sceneDescription, config, characters);
         
         generatedPanels.push({
           ...panel,
           imageUrl,
-          promptUsed: enhancedPrompt
+          promptUsed: promptUsed
         });
         
         // Small delay to avoid rate limiting
@@ -359,86 +375,95 @@ ${script}`;
   private parseScriptIntoScenes(script: string): Array<{ description: string; dialogue: string }> {
     const scenes: Array<{ description: string; dialogue: string }> = [];
     
-    // Split script into paragraphs
-    const paragraphs = script.split(/\n\s*\n/).filter(p => p.trim());
-    
-    for (const paragraph of paragraphs) {
-      const lines = paragraph.split('\n').map(line => line.trim()).filter(line => line);
-      
-      if (lines.length === 0) continue;
-      
-      let description = '';
-      let dialogue = '';
-      
-      for (const line of lines) {
-        // Check if line looks like dialogue (has character name or quotes)
-        if (line.includes(':') || line.startsWith('"') || line.includes('(') && line.includes(')')) {
-          dialogue += line + ' ';
-        } else {
-          description += line + ' ';
+    // Regex to capture PAGE, PANEL, SCENE, and DIALOGUE blocks
+    const panelRegex = /PAGE:\s*\d+,\s*PANEL:\s*\d+\s*SCENE:(.*?)\s*DIALOGUE:(.*)/gis;
+    let match;
+    while ((match = panelRegex.exec(script)) !== null) {
+        let description = match[1].trim();
+        let dialogue = match[2].trim();
+
+        if (dialogue.toLowerCase() === '(none)') {
+            dialogue = '';
         }
-      }
-      
-      scenes.push({
-        description: description.trim() || 'Comic panel scene',
-        dialogue: dialogue.trim()
-      });
+        scenes.push({ description, dialogue });
     }
-    
+
+    // Fallback for simpler formats
+    if (scenes.length === 0) {
+        const paragraphs = script.split(/\n\s*\n/).filter(p => p.trim());
+        for (const paragraph of paragraphs) {
+            const lines = paragraph.split('\n').map(line => line.trim()).filter(Boolean);
+            if (lines.length === 0) continue;
+
+            let description = '';
+            let dialogue = '';
+
+            for (const line of lines) {
+                if (line.match(/^[A-Z\s]+:/) || line.startsWith('"')) {
+                    dialogue += line + ' ';
+                } else {
+                    description += line + ' ';
+                }
+            }
+            scenes.push({ description: description.trim() || 'Comic panel scene', dialogue: dialogue.trim() });
+        }
+    }
+
     return scenes;
   }
 
-  private buildImagePrompt(basePrompt: string, config: ComicConfig): string {
+  private buildImagePrompt(basePrompt: string, config: ComicConfig, characters?: Character[]): string {
     let prompt = basePrompt;
     
     // Add style modifiers
     const styleModifiers = {
-      cyberpunk: 'cyberpunk style, neon lights, futuristic city, dark atmosphere',
-      '3d': '3D rendered, volumetric lighting, detailed textures, realistic materials',
-      photorealistic: 'ultra photorealistic, DSLR camera quality, professional studio lighting, sharp focus, highly detailed, 8K resolution',
-      manga: 'manga style, anime art, black and white or limited color',
-      western: 'western comic book style, bold colors, dynamic action',
-      'golden-age': 'golden age comics style, vintage comic book art',
-      modern: 'modern comic book style, detailed art, professional comic',
-      anime: 'anime style, cel-shaded, Japanese animation',
-      noir: 'film noir style, black and white, dramatic shadows',
-      'pop-art': 'pop art style, bold colors, comic book dots',
-      'pixel-art': '8-bit pixel art style, retro gaming aesthetic'
+      cyberpunk: 'cyberpunk style, neon lights, futuristic city, dark atmosphere, gritty, high-tech low-life',
+      '3d': '3D rendered, CGI, octane render, unreal engine, volumetric lighting, detailed textures, realistic materials',
+      photorealistic: 'photograph, photorealistic, 8k, DSLR, sharp focus, high detail, cinematic lighting',
+      manga: 'manga style, black and white, screentones, sharp lines, dynamic composition, japanese comic art',
+      western: 'western comic book style, bold colors, action lines, superhero comic art',
+      'golden-age': 'golden age comics style, vintage, retro, 1940s comic art, pulpy',
+      modern: 'modern comic book style, detailed pencils and inks, digital coloring, cinematic',
+      anime: 'anime film screenshot, Studio Ghibli, Makoto Shinkai, cel-shaded, vibrant colors',
+      noir: 'film noir style, black and white, high contrast, dramatic shadows, moody, 1950s detective movie',
+      'pop-art': 'pop art style, Andy Warhol, Roy Lichtenstein, bold colors, ben-day dots, graphic',
+      'pixel-art': '8-bit pixel art, retro gaming aesthetic, pixelated, sprite art'
     };
     
     if (styleModifiers[config.style]) {
-      prompt = `${prompt}, ${styleModifiers[config.style]}`;
+      prompt = `(${styleModifiers[config.style]}:1.4), ${prompt}`;
     }
     
     // Add quality and format modifiers
     prompt += ', comic book panel, high quality, detailed art';
     
     if (config.promptBooster) {
-      prompt += ', masterpiece, best quality, ultra detailed';
+      prompt += ', masterpiece, best quality, ultra detailed, cinematic composition';
+    }
+
+    if (characters && characters.length > 0) {
+      const characterContext = characters.map(c => {
+        if (basePrompt.toLowerCase().includes(c.name.toLowerCase())) {
+          return `${c.name} appears as described: ${c.description || 'no description'}.`;
+        }
+        return null;
+      }).filter(Boolean).join(' ');
+
+      if (characterContext) {
+        prompt += ` | Character details: ${characterContext}`;
+      }
     }
     
     return prompt;
   }
 
-  private addCharacterContext(prompt: string, characters: Character[], config: ComicConfig): string {
-    if (characters.length === 0) return prompt;
-    
-    // Add character descriptions to the prompt
-    const characterDescriptions = characters
-      .map(char => `${char.name}: ${char.description}`)
-      .join(', ');
-    
-    return `${prompt}, featuring characters: ${characterDescriptions}`;
-  }
-
   // Generate character preview using Gemini 2.0 Flash Image Generation with image input
   async generateCharacterPreview(referenceImageData: string, description: string, style?: string): Promise<string> {
-    if (!this.apiKeys.gemini) {
-      throw new Error('Gemini API key is required for character preview generation');
-    }
-
+    const apiKey = this.getNextGeminiKey();
+    if (!apiKey) throw new Error('No valid Gemini API key available.');
+    
     try {
-      const genAI = new GoogleGenAI({ apiKey: this.apiKeys.gemini });
+      const genAI = new GoogleGenAI({ apiKey });
       
       // Create a chat for image generation
       const chat = genAI.chats.create({
@@ -453,7 +478,7 @@ ${script}`;
       const base64Data = referenceImageData.split(',')[1];
       const stylePrompt = style ? ` in ${style} comic book style` : ' in comic book style';
       
-      const prompt = `Generate a character illustration based on this reference image and description. The generated image should be 90% or more matching with the original character${stylePrompt}. Character description: ${description}. Style: detailed comic book character art, consistent character design, high quality illustration, maintain exact character features and appearance.`;
+      const prompt = `Re-draw this character based on the provided image and description, but in your own artistic interpretation for a comic book. **Strictly maintain all key features, clothing, and colors from the reference image.** The goal is to see how you, the AI, would draw this character for a comic. Description: ${description}. The final image must be a high-quality, detailed character portrait suitable for a comic book.${stylePrompt}`;
 
       const result = await chat.sendMessageStream({
         message: [
