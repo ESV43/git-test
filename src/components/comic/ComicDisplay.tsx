@@ -73,6 +73,15 @@ export const ComicDisplay = ({ panels, onPanelsChange, config }: ComicDisplayPro
     return "grid-cols-1 md:grid-cols-2 lg:grid-cols-3";
   };
 
+  const dialogueBubbleStyle: React.CSSProperties = {
+    position: 'absolute',
+    bottom: '1rem',
+    left: '1rem',
+    right: '1rem',
+    padding: '0.5rem',
+    background: 'rgba(255, 255, 255, 0.85)',
+  };
+
   return (
     <Card className="bg-cyber-card border-primary">
       <CardHeader>
@@ -168,6 +177,13 @@ export const ComicDisplay = ({ panels, onPanelsChange, config }: ComicDisplayPro
                         </Button>
                       </div>
                     </>
+                  ) : panel.error ? (
+                    <div className="absolute inset-0 flex items-center justify-center p-4">
+                      <div className="text-center text-destructive">
+                        <p className="font-semibold">Image Generation Failed</p>
+                        <p className="text-xs">{panel.error}</p>
+                      </div>
+                    </div>
                   ) : (
                     <div className="absolute inset-0 flex items-center justify-center">
                       <p className="text-muted-foreground">No image generated</p>
@@ -180,15 +196,16 @@ export const ComicDisplay = ({ panels, onPanelsChange, config }: ComicDisplayPro
                       {index + 1}
                     </Badge>
                   </div>
-                </div>
-                
                 {/* Dialogue Bubble */}
-                {showDialogue && panel.dialogue && (
-                  <div className="relative bg-muted/30 p-3 rounded-lg border border-border">
-                    <div className="absolute -top-2 left-4 w-4 h-4 bg-muted/30 border-l border-t border-border transform rotate-45"></div>
-                    <p className="text-sm font-medium">{panel.dialogue}</p>
-                  </div>
+                {showDialogue && panel.dialogue && !panel.isGenerating && panel.imageUrl && (
+                  <div
+                    className="text-black rounded-lg text-sm text-center font-bold font-sans shadow-lg backdrop-blur-sm"
+                    style={dialogueBubbleStyle}
+                  >
+                    {panel.dialogue}
+                </div>
                 )}
+                </div>
                 
                 {/* Panel Info */}
                 <div className="text-xs text-muted-foreground space-y-1">
