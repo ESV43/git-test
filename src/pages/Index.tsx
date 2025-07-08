@@ -15,8 +15,8 @@ import { toast } from "sonner";
 const Index = () => {
   const [script, setScript] = useState("");
   const [config, setConfig] = useState<ComicConfig>({
-    textAI: "openai", // You can change this to a Gemini model if you prefer
-    imageAI: "gemini-2.0-flash-image-generation",
+    textAI: "gemini-1.5-flash-latest",
+    imageAI: "gemini-1.5-pro-latest",
     style: "cyberpunk",
     aspectRatio: "16:9",
     panelCount: 4,
@@ -48,7 +48,6 @@ const Index = () => {
       return;
     }
 
-    // Check if required API keys are available for selected models
     if (!comicAPI.hasRequiredAPIKey(config.imageAI)) {
       toast.error(`API key is required for ${config.imageAI}. Please configure your API key.`);
       return;
@@ -64,13 +63,11 @@ const Index = () => {
     setGenerationProgress({ current: 0, total: totalPanels, status: "Processing script..." });
     
     try {
-      // Step 1: Process script into panels for ALL pages
       setGenerationProgress({ current: 0, total: totalPanels, status: "Analyzing script..." });
       const processedPanels = await comicAPI.processScript(script, config);
       
       console.log(`Processing ${processedPanels.length} panels across ${config.pageCount} pages (${config.panelCount} panels per page)`);
       
-      // Step 2: Generate images for ALL panels
       const finalPanels = await comicAPI.generateComicPanels(
         processedPanels,
         config,
@@ -98,9 +95,7 @@ const Index = () => {
       <Header />
       
       <main className="container mx-auto px-6 py-8 space-y-8">
-        {/* Main Content Grid */}
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
-          {/* Left Column - Script & Config */}
           <div className="xl:col-span-1 space-y-6">
             <StoryInput 
               config={config}
@@ -131,7 +126,6 @@ const Index = () => {
             />
           </div>
           
-          {/* Right Column - Comic Display & Export */}
           <div className="xl:col-span-2 space-y-6">
             {isGenerating && (
               <GenerationStatus progress={generationProgress} />
