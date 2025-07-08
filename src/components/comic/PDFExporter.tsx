@@ -81,11 +81,27 @@ export class PDFExporter {
         
         // Add dialogue if enabled
         if (options.includeDialogue && panel.dialogue) {
-          pdf.setFontSize(8);
-          pdf.setTextColor(0, 0, 0);
-          const lines = pdf.splitTextToSize(panel.dialogue, panelWidth - 4);
-          pdf.text(lines, x + 2, y + panelHeight - 8);
-        }
+            const bubblePadding = 2;
+            pdf.setFontSize(8);
+
+            // Split text to fit in the bubble
+            const lines = pdf.splitTextToSize(panel.dialogue, panelWidth - 10 - (bubblePadding * 2));
+            const textHeight = lines.length * 3.5;
+
+            // Bubble position
+            const bubbleX = x + 5;
+            const bubbleHeight = textHeight + (bubblePadding * 2);
+            const bubbleY = y + panelHeight - bubbleHeight - 5;
+
+            // Draw bubble (white rounded rectangle with black border)
+            pdf.setFillColor(255, 255, 255);
+            pdf.setDrawColor(0, 0, 0);
+            pdf.setLineWidth(0.5);
+            pdf.roundedRect(bubbleX, bubbleY, panelWidth - 10, bubbleHeight, 3, 3, 'FD');
+
+            pdf.setTextColor(0, 0, 0);
+            pdf.text(lines, bubbleX + bubblePadding, bubbleY + bubbleHeight / 2, { baseline: 'middle' });
+          }
       }
       
       // Add page number
