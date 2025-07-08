@@ -146,10 +146,35 @@ export class ComicGeneratorAPI {
   }
 
   async analyzeStoryToScript(story: string, config: ComicConfig): Promise<string> {
-    if (!this.hasRequiredAPIKey(config.textAI)) throw new Error(`API key required for ${config.textAI}.`);
-    const prompt = `Adapt this story into a comic script for ${config.pageCount} pages with ${config.panelCount} panels each. For each panel, provide: PAGE, PANEL, SCENE (detailed description), and DIALOGUE (or "none"). Style: "${config.style}".\n\nStory:\n${story}`;
-    if (config.textAI.startsWith('gemini')) return this.callGeminiTextAPI(prompt);
-    return this.convertStoryToBasicScript(story, config);
+    if (!this.hasRequiredAPIKey(config.textAI)) {
+      throw new Error(`API key required for ${config.textAI}.`);
+    }
+    const prompt = `You are a professional screenwriter. Your task is to adapt the following story into a classic screenplay format.
+
+**Instructions:**
+1.  Start with "FADE IN:".
+2.  Use standard screenplay elements:
+    - **Scene Headings:** In all caps (e.g., EXT. CYBERPUNK ALLEY - NIGHT). Use INT. for interior scenes and EXT. for exterior scenes.
+    - **Action Lines:** Describe the setting, character actions, and important visual details.
+    - **Character Cues:** In all caps, followed by the dialogue on the next line (e.g., DETECTIVE NOVA).
+    - **Dialogue:** The words the characters speak.
+    - **Parentheticals:** For tone or non-verbal actions on their own line (e.g., (voice over), (CONT'D), (sarcastically)).
+3.  Ensure the script flows logically and captures the essence of the story.
+4.  The visual style should be "${config.style}". Infuse this style into your action line descriptions.
+5.  End with "FADE OUT.".
+
+**Story to Adapt:**
+---
+${story}
+---
+
+Produce the complete screenplay following these instructions precisely.`;
+
+    if (config.textAI.startsWith('gemini')) {
+      return this.callGeminiTextAPI(prompt);
+    }
+    // Fallback for non-gemini models is less effective for this format.
+    return "This feature works best with a Gemini text model.";
   }
 
   private async callGeminiTextAPI(prompt: string): Promise<string> {
@@ -161,32 +186,88 @@ export class ComicGeneratorAPI {
     });
   }
 
-  private convertStoryToBasicScript(story: string, config: ComicConfig): string {
-    const paragraphs = story.split(/\n\s*\n/).filter(p => p.trim());
-    const totalPanels = config.pageCount * config.panelCount;
-    let script = ``;
-    for (let i = 0; i < totalPanels; i++) {
-      const p = paragraphs[i % paragraphs.length] || 'Comic scene continues...';
-      script += `PAGE: ${Math.floor(i / config.panelCount) + 1}, PANEL: ${(i % config.panelCount) + 1}\nSCENE: ${p.substring(0, 200)}...\nDIALOGUE: (none)\n\n`;
+  private parseScreenplayToPanels(script: string): Array<{ description: string; dialogue: string }> {
+    const panels: Array<{ description: string; dialogue: string }> = [];
+    // Split by double newline to get logical blocks
+    const blocks = script.split(/\n\s*\n/).filter(block => block.trim().length > 0);
+
+    for (const block of blocks) {
+        const lines = block.split('\n').map(l => l.trim());
+        const firstLine = lines[0];
+
+        // Ignore FADE IN/OUT
+        if (firstLine.startsWith('FADE')) continue;
+
+        // Is it a scene heading?
+        if (firstLine.startsWith('INT.') || firstLine.startsWith('EXT.')) {
+            panels.push({ description: `Establishing shot: ${block}`, dialogue: '' });
+            continue;
+        }
+
+        // Check for dialogue block: A block where the first line is all-caps (character cue)
+        // and is not a scene heading.
+        const isDialogueCue = (str: string) => /^[A-Z][A-Z\s()']+$/.test(str) && !str.startsWith('INT.') && !str.startsWith('EXT.');
+
+        if (isDialogueCue(firstLine)) {
+            const character = firstLine.replace(/\(.*\)/, '').trim();
+            const dialogueText = lines.slice(1).join(' ').trim();
+            
+            // A dialogue panel's description is the *previous* action/scene block.
+            // This makes the image relevant to who is speaking.
+            const lastDescription = panels.length > 0 ? panels[panels.length - 1].description : `A shot of ${character} speaking.`;
+            
+            panels.push({ description: lastDescription, dialogue: `${character}: ${dialogueText}` });
+            continue;
+        }
+
+        // Otherwise, it's an action block.
+        panels.push({ description: block, dialogue: '' });
     }
-    return script;
+    
+    // Post-processing: Merge consecutive action blocks to create more comprehensive scenes
+    const mergedPanels: Array<{ description: string; dialogue: string }> = [];
+    if (panels.length > 0) {
+        let currentDescription = panels[0].description;
+        let currentDialogue = panels[0].dialogue;
+
+        for (let i = 1; i < panels.length; i++) {
+            const nextPanel = panels[i];
+            // If the next panel is an action block and the current one is also an action block, merge them.
+            if (!nextPanel.dialogue && !currentDialogue) {
+                currentDescription += `\n${nextPanel.description}`;
+            } else {
+                mergedPanels.push({ description: currentDescription, dialogue: currentDialogue });
+                currentDescription = nextPanel.description;
+                currentDialogue = nextPanel.dialogue;
+            }
+        }
+        mergedPanels.push({ description: currentDescription, dialogue: currentDialogue });
+    }
+
+
+    return mergedPanels.length > 0 ? mergedPanels : [{ description: script, dialogue: '' }];
   }
 
   async processScript(script: string, config: ComicConfig): Promise<ComicPanel[]> {
-    let finalScript = script;
-    if (this.hasRequiredAPIKey(config.textAI) && config.textAI.startsWith('gemini')) {
-      try {
-        const prompt = `Enhance this comic script for ${config.pageCount} pages, ${config.panelCount} panels/page. Style: ${config.style}.\n\nScript:\n${script}`;
-        finalScript = await this.callGeminiTextAPI(prompt);
-      } catch (error) { console.warn('Script enhancement failed, using original script:', error); }
+    const panelData = this.parseScreenplayToPanels(script);
+    
+    if(panelData.length === 0) {
+        return [];
     }
-    const scenes = this.parseScriptIntoScenes(finalScript);
-    const totalPanels = config.pageCount * config.panelCount;
-    return Array.from({ length: totalPanels }, (_, i) => ({
-      id: `page-${Math.floor(i / config.panelCount) + 1}-panel-${(i % config.panelCount) + 1}`,
-      sceneDescription: scenes[i % scenes.length]?.description || 'Panel scene',
-      dialogue: scenes[i % scenes.length]?.dialogue || ''
-    }));
+      
+    const totalPanelsToGenerate = config.pageCount * config.panelCount;
+    const panels: ComicPanel[] = [];
+    
+    for (let i = 0; i < totalPanelsToGenerate; i++) {
+        const scene = panelData[i % panelData.length]; // Loop through scenes if not enough
+        panels.push({
+            id: `page-${Math.floor(i / config.panelCount) + 1}-panel-${(i % config.panelCount) + 1}`,
+            sceneDescription: scene.description,
+            dialogue: scene.dialogue,
+        });
+    }
+
+    return panels;
   }
 
   async generateComicPanels(
@@ -219,18 +300,6 @@ export class ComicGeneratorAPI {
     });
     if (!response.ok) throw new Error('HuggingFace API request failed');
     return URL.createObjectURL(await response.blob());
-  }
-
-  private parseScriptIntoScenes(script: string): Array<{ description: string; dialogue: string }> {
-    const scenes: Array<{ description: string; dialogue: string }> = [];
-    const panelRegex = /PAGE:[\s\S]*?PANEL:[\s\S]*?SCENE:([\s\S]*?)DIALOGUE:([\s\S]*?)(?=(PAGE:|PANEL:|SCENE:|$))/gi;
-    let match;
-    while ((match = panelRegex.exec(script)) !== null) {
-      scenes.push({ description: match[1].trim(), dialogue: match[2].trim().toLowerCase() === '(none)' ? '' : match[2].trim() });
-    }
-    if (scenes.length > 0) return scenes;
-    // Fallback
-    return script.split(/\n\s*\n/).map(p => ({ description: p, dialogue: '' }));
   }
 
   buildImagePrompt(basePrompt: string, config: ComicConfig, characters?: Character[]): string {
