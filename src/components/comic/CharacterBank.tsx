@@ -7,13 +7,14 @@ import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Users, Plus, Trash2, Upload, Wand2, Eye, AlertTriangle, X } from "lucide-react";
-import { Character } from "@/types/comic";
+import { Character, ComicConfig } from "@/types/comic";
 import { comicAPI } from "@/services/api";
 import { toast } from "sonner";
 
 interface CharacterBankProps {
   characters: Character[];
   onCharactersChange: (characters: Character[]) => void;
+  config: ComicConfig;
 }
 
 export const CharacterBank = ({ characters, onCharactersChange }: CharacterBankProps) => {
@@ -26,7 +27,7 @@ export const CharacterBank = ({ characters, onCharactersChange }: CharacterBankP
   });
   const [generatingPreview, setGeneratingPreview] = useState(false);
   const [previewImages, setPreviewImages] = useState<string[]>([]);
-  const [previewModel, setPreviewModel] = useState<'gemini' | 'flux'>('gemini');
+  const [previewModel, setPreviewModel] = useState<'gemini-2.0-flash-image-generation' | 'flux'>('gemini-2.0-flash-image-generation');
 
   const addCharacter = () => {
     if (!newCharacter.name?.trim()) return;
@@ -88,14 +89,14 @@ export const CharacterBank = ({ characters, onCharactersChange }: CharacterBankP
       return;
     }
 
-    if (previewModel === 'gemini' && !comicAPI.hasRequiredAPIKey('gemini')) {
+    if (previewModel === 'gemini-2.0-flash-image-generation' && !comicAPI.hasRequiredAPIKey('gemini')) {
       toast.error("Gemini API key is required for Gemini preview generation");
       return;
     }
 
     setGeneratingPreview(true);
     try {
-      const referenceImage = newCharacter.images[0];
+      const referenceImage = newCharacter.images[0] as string;
       let preview: string;
       
       if (previewModel === 'gemini') {
@@ -191,20 +192,20 @@ export const CharacterBank = ({ characters, onCharactersChange }: CharacterBankP
                     <div className="flex items-center justify-between">
                       <span className="text-sm font-medium">Reference Images:</span>
                       <div className="flex items-center space-x-2">
-                        <Select value={previewModel} onValueChange={(value: 'gemini' | 'flux') => setPreviewModel(value)}>
-                          <SelectTrigger className="w-24 h-8 text-xs">
+                        <Select value={previewModel} onValueChange={(value: 'gemini-2.0-flash-image-generation' | 'flux') => setPreviewModel(value)}>
+                          <SelectTrigger className="w-48 h-8 text-xs">
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="gemini">Gemini</SelectItem>
-                            <SelectItem value="flux">Flux</SelectItem>
+                            <SelectItem value="gemini-2.0-flash-image-generation">Gemini 2.0 Flash</SelectItem>
+                            <SelectItem value="flux">Flux (Fallback)</SelectItem>
                           </SelectContent>
                         </Select>
                         <Button
                           size="sm"
                           variant="outline"
                           onClick={generateCharacterPreview}
-                          disabled={generatingPreview || !newCharacter.description || (previewModel === 'gemini' && !comicAPI.hasRequiredAPIKey('gemini'))}
+                          disabled={generatingPreview || !newCharacter.description || (previewModel === 'gemini-2.0-flash-image-generation' && !comicAPI.hasRequiredAPIKey('gemini'))}
                           className="border-primary text-primary hover:bg-primary/10"
                         >
                           <Wand2 className="w-3 h-3 mr-1" />
@@ -220,7 +221,7 @@ export const CharacterBank = ({ characters, onCharactersChange }: CharacterBankP
                     ))}
                   </div>
 
-                  {previewModel === 'gemini' && !comicAPI.hasRequiredAPIKey('gemini') && (
+                  {previewModel === 'gemini-2.0-flash-image-generation' && !comicAPI.hasRequiredAPIKey('gemini') && (
                     <div className="flex items-center space-x-2 p-2 bg-destructive/10 border border-destructive/50 rounded text-xs">
                       <AlertTriangle className="w-3 h-3 text-destructive" />
                       <span className="text-destructive">Gemini API key required for Gemini preview generation</span>
