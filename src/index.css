@@ -1,0 +1,167 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Cyberpunk Comic Generator Design System - Dark Mode Only */
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@300;400;500;600;700&display=swap');
+
+@layer base {
+  :root {
+    /* Cyberpunk Color Palette */
+    --background: 222 47% 4%;
+    --foreground: 180 100% 90%;
+    
+    --card: 222 47% 6%;
+    --card-foreground: 180 100% 90%;
+    
+    --popover: 222 47% 6%;
+    --popover-foreground: 180 100% 90%;
+    
+    /* Neon Primary - Electric Blue/Cyan */
+    --primary: 180 100% 50%;
+    --primary-foreground: 222 47% 4%;
+    --primary-glow: 180 100% 70%;
+    
+    /* Secondary - Neon Pink/Magenta */
+    --secondary: 300 100% 60%;
+    --secondary-foreground: 222 47% 4%;
+    --secondary-glow: 300 100% 80%;
+    
+    --muted: 222 47% 8%;
+    --muted-foreground: 180 20% 60%;
+    
+    /* Accent - Electric Purple */
+    --accent: 270 100% 60%;
+    --accent-foreground: 222 47% 4%;
+    --accent-glow: 270 100% 80%;
+    
+    --destructive: 0 100% 60%;
+    --destructive-foreground: 222 47% 4%;
+    
+    --border: 222 47% 15%;
+    --input: 222 47% 8%;
+    --ring: 180 100% 50%;
+    
+    /* Cyberpunk Specific Colors */
+    --neon-green: 120 100% 50%;
+    --neon-orange: 30 100% 60%;
+    --electric-yellow: 60 100% 50%;
+    --cyber-red: 0 100% 60%;
+    
+    /* Gradients */
+    --gradient-cyber: linear-gradient(135deg, hsl(var(--primary)), hsl(var(--secondary)));
+    --gradient-glow: linear-gradient(180deg, hsl(var(--accent) / 0.2), hsl(var(--primary) / 0.1));
+    --gradient-card: linear-gradient(145deg, hsl(var(--card)), hsl(222 47% 8%));
+    
+    /* Shadows and Glows */
+    --shadow-neon: 0 0 20px hsl(var(--primary) / 0.5);
+    --shadow-cyber: 0 0 30px hsl(var(--accent) / 0.3), 0 0 60px hsl(var(--secondary) / 0.2);
+    --shadow-panel: 0 8px 32px hsl(222 47% 2% / 0.8);
+    
+    /* Animations */
+    --glow-pulse: glow-pulse 2s ease-in-out infinite alternate;
+    --cyber-flicker: cyber-flicker 0.15s linear infinite;
+    
+    --radius: 0.75rem;
+
+    /* Sidebar (Cyberpunk themed) */
+    --sidebar-background: 222 47% 5%;
+    --sidebar-foreground: 180 100% 90%;
+    --sidebar-primary: 180 100% 50%;
+    --sidebar-primary-foreground: 222 47% 4%;
+    --sidebar-accent: 222 47% 8%;
+    --sidebar-accent-foreground: 180 100% 90%;
+    --sidebar-border: 222 47% 15%;
+    --sidebar-ring: 180 100% 50%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-rajdhani;
+    font-family: 'Rajdhani', 'Orbitron', monospace;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Orbitron', monospace;
+    font-weight: 700;
+  }
+}
+
+/* Cyberpunk Animations */
+@keyframes glow-pulse {
+  0% { 
+    box-shadow: 0 0 5px hsl(var(--primary) / 0.5);
+  }
+  100% { 
+    box-shadow: 0 0 20px hsl(var(--primary) / 0.8), 0 0 30px hsl(var(--primary) / 0.4);
+  }
+}
+
+@keyframes cyber-flicker {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.8; }
+}
+
+@keyframes neon-glow {
+  0%, 100% {
+    text-shadow: 
+      0 0 5px hsl(var(--primary)),
+      0 0 10px hsl(var(--primary)),
+      0 0 15px hsl(var(--primary));
+  }
+  50% {
+    text-shadow: 
+      0 0 2px hsl(var(--primary)),
+      0 0 5px hsl(var(--primary)),
+      0 0 8px hsl(var(--primary));
+  }
+}
+
+@keyframes data-stream {
+  0% { transform: translateY(100%); opacity: 0; }
+  10% { opacity: 1; }
+  90% { opacity: 1; }
+  100% { transform: translateY(-100%); opacity: 0; }
+}
+
+/* Custom Utility Classes */
+@layer utilities {
+  .text-neon {
+    color: hsl(var(--primary));
+    animation: neon-glow 2s ease-in-out infinite alternate;
+  }
+  
+  .text-cyber {
+    background: var(--gradient-cyber);
+    background-clip: text;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  
+  .bg-cyber-card {
+    background: var(--gradient-card);
+    border: 1px solid hsl(var(--border));
+    box-shadow: var(--shadow-panel);
+  }
+  
+  .border-neon {
+    border-color: hsl(var(--primary));
+    box-shadow: 0 0 10px hsl(var(--primary) / 0.3);
+  }
+  
+  .glow-effect {
+    animation: var(--glow-pulse);
+  }
+  
+  .cyber-grid {
+    background-image: 
+      linear-gradient(hsl(var(--primary) / 0.1) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--primary) / 0.1) 1px, transparent 1px);
+    background-size: 20px 20px;
+  }
+}
