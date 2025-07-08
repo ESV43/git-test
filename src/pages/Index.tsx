@@ -141,6 +141,7 @@ const Index = () => {
               panels={panels} 
               onPanelsChange={setPanels}
               config={config}
+              characters={characters}
             />
             
             {panels.length > 0 && (
