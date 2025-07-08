@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -16,14 +16,18 @@ export const ScriptInput = ({ script, onScriptChange, onGenerate, isGenerating }
   const [sceneCount, setSceneCount] = useState(0);
 
   const analyzeScript = (text: string) => {
-    // Simple scene detection - could be enhanced with AI
-    const scenes = text.split(/\n\s*\n/).filter(section => section.trim().length > 0);
-    setSceneCount(scenes.length);
+    // Count scenes by looking for INT. or EXT. at the start of lines
+    const sceneHeadings = text.match(/^(INT\.|EXT\.)/gm);
+    setSceneCount(sceneHeadings ? sceneHeadings.length : 0);
   };
+
+  // Analyze script whenever it changes
+  useEffect(() => {
+    analyzeScript(script);
+  }, [script]);
 
   const handleScriptChange = (value: string) => {
     onScriptChange(value);
-    analyzeScript(value);
   };
 
   const sampleScript = `FADE IN:
@@ -73,14 +77,13 @@ FADE OUT.`;
       </CardHeader>
       <CardContent className="space-y-4">
         <Textarea
-          placeholder="Enter your comic script here... 
+          placeholder="Enter your comic script here in screenplay format... 
           
-Try starting with scene descriptions and dialogue:
-
-SCENE 1:
+EXT. CYBERPUNK CITY - NIGHT
 A mysterious figure walks through a cyberpunk city...
 
-CHARACTER A:
+CHARACTER A
+(V.O.)
 Hello, world of tomorrow!"
           value={script}
           onChange={(e) => handleScriptChange(e.target.value)}
@@ -112,14 +115,14 @@ Hello, world of tomorrow!"
             className="border-secondary"
           >
             <Wand2 className="w-4 h-4 mr-2" />
-            Sample
+            Sample Script
           </Button>
         </div>
         
         {script.trim() && (
           <div className="text-xs text-muted-foreground p-3 bg-muted/30 rounded-md">
             <p className="mb-1">📝 Script Preview:</p>
-            <p>Detected {sceneCount} potential scenes for panel generation.</p>
+            <p>Detected {sceneCount} scenes based on INT./EXT. headings. The app will generate panels from action and dialogue blocks.</p>
           </div>
         )}
       </CardContent>
