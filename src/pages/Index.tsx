@@ -8,15 +8,15 @@ import { ComicDisplay } from "@/components/comic/ComicDisplay";
 import { ExportPanel } from "@/components/comic/ExportPanel";
 import { GenerationStatus } from "@/components/comic/GenerationStatus";
 import { APIKeyInput } from "@/components/ui/api-key-input";
-import { Character, ComicConfig, ComicPanel } from "@/types/comic";
+import { Character, ComicConfig, ComicPanel, APIKeys } from "@/types/comic";
 import { comicAPI } from "@/services/api";
 import { toast } from "sonner";
 
 const Index = () => {
   const [script, setScript] = useState("");
   const [config, setConfig] = useState<ComicConfig>({
-    textAI: "openai",
-    imageAI: "flux",
+    textAI: "openai", // You can change this to a Gemini model if you prefer
+    imageAI: "gemini-2.0-flash-image-generation",
     style: "cyberpunk",
     aspectRatio: "16:9",
     panelCount: 4,
@@ -29,14 +29,15 @@ const Index = () => {
   const [panels, setPanels] = useState<ComicPanel[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationProgress, setGenerationProgress] = useState({ current: 0, total: 0, status: "" });
-  const [apiKeys, setApiKeys] = useState<{ gemini?: string; huggingface?: string }>({});
+  const [apiKeys, setApiKeys] = useState<APIKeys>({});
 
   // Load API keys on component mount
   useEffect(() => {
     comicAPI.loadAPIKeys();
+    setApiKeys({ gemini: comicAPI.getAPIKeys().gemini, huggingface: comicAPI.getAPIKeys().huggingface });
   }, []);
 
-  const handleAPIKeysChange = (keys: { gemini?: string; huggingface?: string }) => {
+  const handleAPIKeysChange = (keys: { gemini?: string[]; huggingface?: string }) => {
     setApiKeys(keys);
     comicAPI.setAPIKeys(keys);
   };
@@ -126,6 +127,7 @@ const Index = () => {
             <CharacterBank 
               characters={characters} 
               onCharactersChange={setCharacters} 
+              config={config}
             />
           </div>
           
