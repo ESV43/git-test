@@ -2,19 +2,22 @@ import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { BookOpen, Edit, RotateCcw, Maximize, Eye, EyeOff, Download } from "lucide-react";
-import { ComicPanel, ComicConfig } from "@/types/comic";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, } from "@/components/ui/dialog";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger, } from "@/components/ui/tooltip";
+import { BookOpen, Edit, RotateCcw, Maximize, Eye, EyeOff } from "lucide-react";
+import { ComicPanel, ComicConfig, Character } from "@/types/comic";
+import { comicAPI } from "@/services/api";
+import { Textarea } from "../ui/textarea";
+import { Input } from "../ui/input";
 
 interface ComicDisplayProps {
   panels: ComicPanel[];
   onPanelsChange: (panels: ComicPanel[]) => void;
   config: ComicConfig;
+  characters: Character[];
 }
 
-export const ComicDisplay = ({ panels, onPanelsChange, config }: ComicDisplayProps) => {
+export const ComicDisplay = ({ panels, onPanelsChange, config, characters, }: ComicDisplayProps) => {
   const [showDialogue, setShowDialogue] = useState(true);
   const [editingPanel, setEditingPanel] = useState<string | null>(null);
   const [editData, setEditData] = useState<Partial<ComicPanel>>({});
@@ -29,9 +32,9 @@ export const ComicDisplay = ({ panels, onPanelsChange, config }: ComicDisplayPro
 
   const saveEdit = () => {
     if (!editingPanel) return;
-    
-    const updatedPanels = panels.map(panel => 
-      panel.id === editingPanel 
+
+    const updatedPanels = panels.map((panel) =>
+      panel.id === editingPanel
         ? { ...panel, ...editData }
         : panel
     );
@@ -41,28 +44,38 @@ export const ComicDisplay = ({ panels, onPanelsChange, config }: ComicDisplayPro
     setEditData({});
   };
 
-  const regeneratePanel = (panelId: string) => {
+  const regeneratePanel = async (panelId: string) => {
+    const panelToRegen = panels.find((p) => p.id === panelId);
+    if (!panelToRegen) return;
+
     // Mark panel as regenerating
-    const updatedPanels = panels.map(panel => 
-      panel.id === panelId 
-        ? { ...panel, isGenerating: true }
+    let updatedPanels = panels.map((panel) =>
+      panel.id === panelId
+        ? { ...panel, isGenerating: true, error: undefined }
         : panel
     );
     onPanelsChange(updatedPanels);
-    
-    // Simulate regeneration
-    setTimeout(() => {
-      const finalPanels = panels.map(panel => 
-        panel.id === panelId 
-          ? { 
-              ...panel, 
+
+    try {
+      const imageUrl = await comicAPI.generateImage(panelToRegen.sceneDescription, config, characters);
+      const promptUsed = comicAPI.buildImagePrompt(panelToRegen.sceneDescription, config, characters);
+
+      const finalPanels = panels.map((panel) =>
+        panel.id === panelId
+          ? {
+              ...panel,
               isGenerating: false,
-              imageUrl: `https://picsum.photos/800/600?random=${Date.now()}`
+              imageUrl,
+              promptUsed,
             }
           : panel
       );
       onPanelsChange(finalPanels);
-    }, 3000);
+    } catch (error) {
+      console.error("Panel regeneration failed:", error);
+      const finalPanels = panels.map((panel) => panel.id === panelId ? { ...panel, isGenerating: false, error: `Regeneration failed.`, } : panel);
+      onPanelsChange(finalPanels);
+    }
   };
 
   const getGridCols = () => {
@@ -73,13 +86,27 @@ export const ComicDisplay = ({ panels, onPanelsChange, config }: ComicDisplayPro
     return "grid-cols-1 md:grid-cols-2 lg:grid-cols-3";
   };
 
+  const getFontClass = (fontName: string) => {
+    switch (fontName) {
+      case "comic-sans":
+        return 'font-["Comic_Sans_MS",_"Comic_Neue",_cursive]';
+      case "anime":
+        return "font-rajdhani font-bold tracking-wide";
+      case "gothic":
+        return "font-orbitron";
+      case "modern":
+        return "font-sans";
+      default:
+        return "font-sans";
+    }
+  };
+
   const dialogueBubbleStyle: React.CSSProperties = {
     position: 'absolute',
     bottom: '1rem',
     left: '1rem',
     right: '1rem',
-    padding: '0.5rem',
-    background: 'rgba(255, 255, 255, 0.85)',
+    padding: '0.5rem 1rem', backgroundColor: 'rgba(255, 255, 255, 0.9)', border: '2px solid black', borderRadius: '10px', textAlign: 'center', color: 'black', textShadow: '1px 1px 0 #fff',
   };
 
   return (
@@ -90,7 +117,7 @@ export const ComicDisplay = ({ panels, onPanelsChange, config }: ComicDisplayPro
             <BookOpen className="w-5 h-5 mr-2" />
             Comic Panels
           </CardTitle>
-          
+
           <div className="flex items-center space-x-2">
             <Button
               size="sm"
@@ -101,14 +128,14 @@ export const ComicDisplay = ({ panels, onPanelsChange, config }: ComicDisplayPro
               {showDialogue ? <EyeOff className="w-4 h-4 mr-1" /> : <Eye className="w-4 h-4 mr-1" />}
               Dialogue
             </Button>
-            
+
             <Badge variant="secondary" className="text-xs">
               {panels.length} panels
             </Badge>
           </div>
         </div>
       </CardHeader>
-      
+
       <CardContent>
         {panels.length === 0 ? (
           <div className="text-center py-12 text-muted-foreground">
@@ -119,9 +146,9 @@ export const ComicDisplay = ({ panels, onPanelsChange, config }: ComicDisplayPro
         ) : (
           <div className={`grid ${getGridCols()} gap-6`}>
             {panels.map((panel, index) => (
-              <div key={panel.id} className="space-y-3">
+              <div key={panel.id} className="space-y-3 bg-cyber-card p-3 rounded-lg border border-border">
                 {/* Panel Image */}
-                <div className="relative group bg-muted/30 rounded-lg overflow-hidden border border-border aspect-[4/3]">
+                <div className="relative group bg-muted/30 rounded-lg overflow-hidden border border-border aspect-[4/3]" >
                   {panel.isGenerating ? (
                     <div className="absolute inset-0 flex items-center justify-center bg-muted/50">
                       <div className="text-center space-y-2">
@@ -136,7 +163,7 @@ export const ComicDisplay = ({ panels, onPanelsChange, config }: ComicDisplayPro
                         alt={`Panel ${index + 1}`}
                         className="w-full h-full object-cover"
                       />
-                      
+
                       {/* Panel Overlay */}
                       <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-center justify-center space-x-2">
                         <Dialog>
@@ -152,14 +179,14 @@ export const ComicDisplay = ({ panels, onPanelsChange, config }: ComicDisplayPro
                             <div className="space-y-4">
                               <img src={panel.imageUrl} alt={`Panel ${index + 1}`} className="w-full rounded-lg" />
                               {showDialogue && panel.dialogue && (
-                                <div className="p-4 bg-muted/50 rounded-lg">
-                                  <p className="font-medium">{panel.dialogue}</p>
+                                <div className={`p-4 bg-muted/50 rounded-lg text-center ${getFontClass(config.speechBubbleFont)}`}>
+                                  <p className="font-medium text-lg">{panel.dialogue}</p>
                                 </div>
                               )}
                             </div>
                           </DialogContent>
                         </Dialog>
-                        
+
                         <Button
                           size="sm"
                           variant="secondary"
@@ -167,7 +194,7 @@ export const ComicDisplay = ({ panels, onPanelsChange, config }: ComicDisplayPro
                         >
                           <Edit className="w-4 h-4" />
                         </Button>
-                        
+
                         <Button
                           size="sm"
                           variant="secondary"
@@ -189,29 +216,45 @@ export const ComicDisplay = ({ panels, onPanelsChange, config }: ComicDisplayPro
                       <p className="text-muted-foreground">No image generated</p>
                     </div>
                   )}
-                  
+
                   {/* Panel Number */}
                   <div className="absolute top-2 left-2">
                     <Badge className="bg-primary text-primary-foreground">
                       {index + 1}
                     </Badge>
                   </div>
-                {/* Dialogue Bubble */}
-                {showDialogue && panel.dialogue && !panel.isGenerating && panel.imageUrl && (
-                  <div
-                    className="text-black rounded-lg text-sm text-center font-bold font-sans shadow-lg backdrop-blur-sm"
-                    style={dialogueBubbleStyle}
-                  >
-                    {panel.dialogue}
+                  {/* Dialogue Bubble */}
+                  {showDialogue && panel.dialogue && !panel.isGenerating && panel.imageUrl && (
+                    <div
+                      className={`text-sm text-center font-bold shadow-lg backdrop-blur-sm ${getFontClass(config.speechBubbleFont)}`}
+                      style={dialogueBubbleStyle}
+                    >
+                      {panel.dialogue}
+                    </div>
+                  )}
                 </div>
-                )}
-                </div>
-                
-                {/* Panel Info */}
-                <div className="text-xs text-muted-foreground space-y-1">
-                  <p><strong>Scene:</strong> {panel.sceneDescription}</p>
+
+                {/* Panel Info below the image */}
+                <div className="text-xs text-muted-foreground space-y-2 px-1">
+                  <div>
+                    <h4 className="font-bold text-sm text-foreground mb-1">Scene Description</h4>
+                    <p>{panel.sceneDescription}</p>
+                  </div>
+
                   {panel.promptUsed && (
-                    <p><strong>Prompt:</strong> {panel.promptUsed.slice(0, 100)}...</p>
+                    <div>
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <h4 className="font-bold text-sm text-foreground mb-1 cursor-help">Prompt Used (truncated)</h4>
+                          </TooltipTrigger>
+                          <TooltipContent className="max-w-md">
+                            <p>{panel.promptUsed}</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                      <p className="line-clamp-2">{panel.promptUsed}</p>
+                    </div>
                   )}
                 </div>
               </div>
