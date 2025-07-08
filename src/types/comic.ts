@@ -38,7 +38,7 @@ export interface GenerationProgress {
 }
 
 export interface APIKeys {
-  gemini?: string;
+  gemini?: string[];
   huggingface?: string;
   pollinations?: string;
 }
