@@ -15,6 +15,54 @@ interface ExportPanelProps {
   config: ComicConfig;
 }
 
+type PanelWithImageData = {
+  dataUrl: string | null;
+  panel: ComicPanel;
+};
+
+// Helper function to pre-fetch all images and convert them to data URLs
+const getPanelImageData = async (panels: ComicPanel[]): Promise<PanelWithImageData[]> => {
+  const imagePromises = panels.map(async (panel, index) => {
+    if (!panel.imageUrl) {
+      return { dataUrl: null, panel };
+    }
+
+    // If it's already a data URL, just return it.
+    if (panel.imageUrl.startsWith('data:')) {
+      return { dataUrl: panel.imageUrl, panel };
+    }
+
+    // Fetch external URLs
+    try {
+      const response = await fetch(panel.imageUrl);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch image: ${response.statusText}`);
+      }
+      const blob = await response.blob();
+      
+      // Convert blob to data URL
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          resolve({ dataUrl: reader.result as string, panel });
+        };
+        reader.onerror = () => {
+          console.error(`FileReader error for panel ${index + 1}`);
+          resolve({ dataUrl: null, panel }); // Resolve with null on error
+        };
+        reader.readAsDataURL(blob);
+      });
+    } catch (error) {
+      console.error(`Error fetching image for panel ${index + 1}:`, error);
+      return { dataUrl: null, panel };
+    }
+  });
+
+  // Use Promise.all to ensure all fetches complete and maintain original order
+  return Promise.all(imagePromises);
+};
+
+
 export const ExportPanel = ({ panels, config }: ExportPanelProps) => {
   const [exportOptions, setExportOptions] = useState<ExportOptions>({
     format: "pdf",
@@ -29,38 +77,46 @@ export const ExportPanel = ({ panels, config }: ExportPanelProps) => {
   };
 
   const handleExport = async () => {
+    if (isExporting || panels.length === 0) return;
+
     setIsExporting(true);
-    
+    toast.info("Preparing export... This may take a moment for large comics.", { duration: 10000 });
+
     try {
+      // Step 1: Pre-fetch all image data to ensure order and handle failures
+      const imageData = await getPanelImageData(panels);
+      const successfulPanels = imageData.filter(d => d.dataUrl);
+
+      if (successfulPanels.length === 0) {
+        throw new Error("No images could be downloaded for the export.");
+      }
+      if (successfulPanels.length < panels.length) {
+        toast.warning(`${panels.length - successfulPanels.length} images failed to download and will be missing from the export.`);
+      }
+
+      toast.success("Images prepared. Creating export file...");
+
       let blob: Blob;
       let filename: string;
       
       switch (exportOptions.format) {
         case 'pdf':
-          blob = await PDFExporter.exportToPDF(panels, config, exportOptions);
+          blob = await PDFExporter.exportToPDF(imageData, config, exportOptions);
           filename = `comic-${Date.now()}.pdf`;
           break;
-          
         case 'zip':
-          blob = await exportAsZip(panels, exportOptions);
-          filename = `comic-images-${Date.now()}.zip`;
-          break;
-          
         case 'cbz':
-          blob = await exportAsCBZ(panels, exportOptions);
-          filename = `comic-${Date.now()}.cbz`;
+          blob = await exportAsZip(imageData, exportOptions);
+          filename = `comic-${Date.now()}.${exportOptions.format}`;
           break;
-          
         case 'epub':
-          blob = await exportAsEPub(panels, config, exportOptions);
+          blob = await exportAsEPub(imageData, config, exportOptions);
           filename = `comic-${Date.now()}.epub`;
           break;
-          
         default:
           throw new Error('Unsupported export format');
       }
       
-      // Download the file
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -73,48 +129,37 @@ export const ExportPanel = ({ panels, config }: ExportPanelProps) => {
       toast.success(`Comic exported as ${exportOptions.format.toUpperCase()}!`);
       
     } catch (error) {
-      toast.error("Export failed. Please try again.");
+      const errorMessage = error instanceof Error ? error.message : "An unknown error occurred.";
+      toast.error(`Export failed: ${errorMessage}`);
       console.error("Export error:", error);
     } finally {
       setIsExporting(false);
     }
   };
 
-  const exportAsZip = async (panels: ComicPanel[], options: ExportOptions): Promise<Blob> => {
+  const exportAsZip = async (imageData: PanelWithImageData[], options: ExportOptions): Promise<Blob> => {
     const { default: JSZip } = await import('jszip');
     const zip = new JSZip();
     
-    for (let i = 0; i < panels.length; i++) {
-      const panel = panels[i];
-      if (panel.imageUrl) {
-        try {
-          const response = await fetch(panel.imageUrl);
-          const blob = await response.blob();
-          zip.file(`panel-${String(i + 1).padStart(3, '0')}.jpg`, blob);
-          
-          if (options.includeDialogue && panel.dialogue) {
-            zip.file(`panel-${String(i + 1).padStart(3, '0')}-dialogue.txt`, panel.dialogue);
-          }
-        } catch (error) {
-          console.error(`Failed to add panel ${i + 1} to zip:`, error);
-        }
+    imageData.forEach(({ dataUrl, panel }, index) => {
+      if (dataUrl) {
+        const base64Data = dataUrl.split(',')[1];
+        zip.file(`panel-${String(index + 1).padStart(3, '0')}.jpg`, base64Data, { base64: true });
       }
-    }
+      
+      if (options.includeDialogue && panel.dialogue) {
+        zip.file(`panel-${String(index + 1).padStart(3, '0')}-dialogue.txt`, panel.dialogue);
+      }
+    });
     
     return await zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
   };
-
-  const exportAsCBZ = async (panels: ComicPanel[], options: ExportOptions): Promise<Blob> => {
-    // CBZ is essentially a ZIP file with a different extension
-    return await exportAsZip(panels, options);
-  };
-
-  const exportAsEPub = async (panels: ComicPanel[], config: ComicConfig, options: ExportOptions): Promise<Blob> => {
+  
+  const exportAsEPub = async (imageData: PanelWithImageData[], config: ComicConfig, options: ExportOptions): Promise<Blob> => {
     const { default: JSZip } = await import('jszip');
     const zip = new JSZip();
     
-    // Create basic ePub structure
-    zip.file('mimetype', 'application/epub+zip');
+    zip.file('mimetype', 'application/epub+zip', { compression: 'STORE' });
     
     const metaInf = zip.folder('META-INF');
     metaInf?.file('container.xml', `<?xml version="1.0"?>
@@ -125,67 +170,61 @@ export const ExportPanel = ({ panels, config }: ExportPanelProps) => {
 </container>`);
 
     const oebps = zip.folder('OEBPS');
+    const imagesFolder = oebps?.folder('images');
     
-    // Create content.opf
     let manifestItems = '';
     let spineItems = '';
     
-    for (let i = 0; i < panels.length; i++) {
-      manifestItems += `    <item id="page${i + 1}" href="page${i + 1}.xhtml" media-type="application/xhtml+xml"/>\n`;
-      manifestItems += `    <item id="image${i + 1}" href="images/panel${i + 1}.jpg" media-type="image/jpeg"/>\n`;
-      spineItems += `    <itemref idref="page${i + 1}"/>\n`;
+    for (let i = 0; i < imageData.length; i++) {
+        const { dataUrl, panel } = imageData[i];
+        const pageNum = i + 1;
+        const imageFilename = `panel${pageNum}.jpg`;
+
+        if (dataUrl) {
+            manifestItems += `    <item id="image${pageNum}" href="images/${imageFilename}" media-type="image/jpeg"/>\n`;
+            const base64Data = dataUrl.split(',')[1];
+            imagesFolder?.file(imageFilename, base64Data, { base64: true });
+        }
+
+        manifestItems += `    <item id="page${pageNum}" href="page${pageNum}.xhtml" media-type="application/xhtml+xml"/>\n`;
+        spineItems += `    <itemref idref="page${pageNum}"/>\n`;
+
+        const pageContent = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head>
+  <title>Page ${pageNum}</title>
+  <style>
+    body { margin: 0; padding: 0; text-align: center; background-color: #000; }
+    img { max-width: 100vw; max-height: 100vh; object-fit: contain; }
+    .dialogue { margin: 1em; padding: 0.5em; background: rgba(255,255,255,0.8); border-radius: 5px; color: #000; }
+  </style>
+</head>
+<body>
+  ${dataUrl ? `<img src="images/${imageFilename}" alt="Comic panel ${pageNum}" />` : ''}
+  ${options.includeDialogue && panel.dialogue ? `<div class="dialogue">${panel.dialogue}</div>` : ''}
+</body>
+</html>`;
+        
+        oebps?.file(`page${pageNum}.xhtml`, pageContent);
     }
-    
+
     oebps?.file('content.opf', `<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="uid" version="3.0">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
     <dc:title>AI Generated Comic</dc:title>
-    <dc:creator>AI Comic Creator</dc:creator>
-    <dc:identifier id="uid">comic-${Date.now()}</dc:identifier>
+    <dc:creator>ComicAI</dc:creator>
+    <dc:identifier id="uid">urn:uuid:${Date.now()}</dc:identifier>
     <dc:language>en</dc:language>
+    <meta property="rendition:layout">pre-paginated</meta>
+    <meta property="rendition:orientation">auto</meta>
+    <meta property="rendition:spread">auto</meta>
   </metadata>
   <manifest>
 ${manifestItems}  </manifest>
   <spine>
 ${spineItems}  </spine>
 </package>`);
-
-    const images = oebps?.folder('images');
-    
-    // Add images and pages
-    for (let i = 0; i < panels.length; i++) {
-      const panel = panels[i];
-      
-      if (panel.imageUrl) {
-        try {
-          const response = await fetch(panel.imageUrl);
-          const blob = await response.blob();
-          images?.file(`panel${i + 1}.jpg`, blob);
-        } catch (error) {
-          console.error(`Failed to add panel ${i + 1} to ePub:`, error);
-        }
-      }
-      
-      // Create XHTML page
-      const pageContent = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
-<html xmlns="http://www.w3.org/1999/xhtml">
-<head>
-  <title>Page ${i + 1}</title>
-  <style>
-    body { margin: 0; padding: 0; text-align: center; }
-    img { max-width: 100%; height: auto; }
-    .dialogue { margin: 10px; padding: 10px; background: #f0f0f0; border-radius: 5px; }
-  </style>
-</head>
-<body>
-  <img src="images/panel${i + 1}.jpg" alt="Comic panel ${i + 1}" />
-  ${options.includeDialogue && panel.dialogue ? `<div class="dialogue">${panel.dialogue}</div>` : ''}
-</body>
-</html>`;
-      
-      oebps?.file(`page${i + 1}.xhtml`, pageContent);
-    }
     
     return await zip.generateAsync({ type: 'blob' });
   };
@@ -201,9 +240,10 @@ ${spineItems}  </spine>
   };
 
   const getEstimatedSize = () => {
-    const baseSize = panels.length * 2; // MB per panel
+    const baseSize = panels.length * 0.5; // MB per panel (more realistic average)
     const qualityMultiplier = exportOptions.quality === "high" ? 1.5 : exportOptions.quality === "medium" ? 1 : 0.6;
-    return Math.round(baseSize * qualityMultiplier);
+    const size = baseSize * qualityMultiplier;
+    return size < 1 ? "< 1" : Math.round(size);
   };
 
   return (
@@ -294,7 +334,7 @@ ${spineItems}  </spine>
           
           <div className="flex items-center justify-between text-sm">
             <span className="text-muted-foreground">Estimated size:</span>
-            <Badge variant="outline">{getEstimatedSize()} MB</Badge>
+            <Badge variant="outline">~{getEstimatedSize()} MB</Badge>
           </div>
           
           <div className="flex items-center justify-between text-sm">
