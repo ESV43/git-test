@@ -1,25 +1,26 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Key, Eye, EyeOff } from "lucide-react";
 import { toast } from "sonner";
 
 interface APIKeyInputProps {
-  onKeysChange: (keys: { gemini?: string; huggingface?: string }) => void;
-  currentKeys: { gemini?: string; huggingface?: string };
+  onKeysChange: (keys: { gemini?: string[]; huggingface?: string }) => void;
+  currentKeys: { gemini?: string[]; huggingface?: string };
 }
 
 export const APIKeyInput = ({ onKeysChange, currentKeys }: APIKeyInputProps) => {
   const [showGemini, setShowGemini] = useState(false);
   const [showHuggingface, setShowHuggingface] = useState(false);
-  const [geminiKey, setGeminiKey] = useState(currentKeys.gemini || "");
+  const [geminiKeys, setGeminiKeys] = useState(Array.isArray(currentKeys.gemini) ? currentKeys.gemini.join('\n') : "");
   const [huggingfaceKey, setHuggingfaceKey] = useState(currentKeys.huggingface || "");
 
   const handleSave = () => {
-    const keys: { gemini?: string; huggingface?: string } = {};
-    if (geminiKey.trim()) keys.gemini = geminiKey.trim();
+    const keys: { gemini?: string[]; huggingface?: string } = {};
+    if (geminiKeys.trim()) keys.gemini = geminiKeys.trim().split('\n').filter(k => k.trim());
     if (huggingfaceKey.trim()) keys.huggingface = huggingfaceKey.trim();
     
     onKeysChange(keys);
@@ -37,16 +38,24 @@ export const APIKeyInput = ({ onKeysChange, currentKeys }: APIKeyInputProps) => 
       <CardContent className="space-y-4">
         <div>
           <Label className="text-sm font-medium mb-2 block">
-            Gemini API Key (for Gemini image generation)
+            Gemini API Keys (one per line)
           </Label>
           <div className="flex">
-            <Input
-              type={showGemini ? "text" : "password"}
-              placeholder="Enter your Gemini API key"
-              value={geminiKey}
-              onChange={(e) => setGeminiKey(e.target.value)}
-              className="bg-muted/50 flex-1"
-            />
+            {showGemini ? (
+              <Textarea
+                placeholder="Enter your Gemini API keys, one per line"
+                value={geminiKeys}
+                onChange={(e) => setGeminiKeys(e.target.value)}
+                className="bg-muted/50 flex-1 min-h-[80px]"
+              />
+            ) : (
+              <Input
+                type="password"
+                placeholder="Multiple keys configured"
+                value={geminiKeys.length > 0 ? "•".repeat(10) : ""}
+                readOnly
+                className="bg-muted/50 flex-1"/>
+            )}
             <Button
               type="button"
               variant="ghost"
