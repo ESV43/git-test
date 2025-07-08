@@ -51,6 +51,46 @@ export class ComicGeneratorAPI {
     return true;
   }
 
+  /**
+   * A robust wrapper for making Gemini API calls that automatically retries with the next available key upon failure.
+   * @param apiCall - The function that makes the actual API call. It receives an API key and must return a Promise.
+   * @returns The result of the successful API call.
+   * @throws An error if all available API keys fail.
+   */
+  private async _callGeminiWithRetry<T>(
+    apiCall: (apiKey: string) => Promise<T>
+  ): Promise<T> {
+    const keys = this.apiKeys.gemini;
+    if (!keys || keys.length === 0) {
+        throw new Error("No Gemini API keys configured. Please add at least one key.");
+    }
+
+    const totalKeys = keys.length;
+    for (let i = 0; i < totalKeys; i++) {
+        const apiKey = this.getNextGeminiKey();
+        if (!apiKey) continue; // Should be unreachable if keys.length > 0
+
+        try {
+            const currentKeyIndex = (this.geminiKeyIndex + totalKeys - 1) % totalKeys;
+            console.log(`Attempting API call with key index: ${currentKeyIndex}`);
+            const result = await apiCall(apiKey);
+            return result; // Success!
+        } catch (error) {
+            const failedKeyIndex = (this.geminiKeyIndex + totalKeys - 1) % totalKeys;
+            console.error(`API call failed with key index ${failedKeyIndex}:`, error);
+            if (i === totalKeys - 1) {
+                // This was the last key, and it failed.
+                throw new Error("All available Gemini API keys failed. Please check your keys and API limits.");
+            }
+            // Otherwise, the loop will continue to the next key.
+        }
+    }
+
+    // This should be unreachable, but acts as a fallback.
+    throw new Error("Failed to execute API call after trying all keys.");
+  }
+
+
   // Dynamic image generation based on selected AI model with auto-fallback
   async generateImage(prompt: string, config: ComicConfig, characters?: Character[]): Promise<string> {
     const enhancedPrompt = this.buildImagePrompt(prompt, config, characters);
@@ -59,38 +99,15 @@ export class ComicGeneratorAPI {
     try {
       // Route to appropriate image generation service
       if (currentModel.startsWith('gemini')) {
-        const numKeys = this.apiKeys.gemini?.length || 0;
-        if (numKeys === 0) {
-          throw new Error(`Gemini API key is required for ${currentModel}. Please configure your API key.`);
-        }
-
-        for (let i = 0; i < numKeys; i++) {
-            const apiKey = this.getNextGeminiKey();
-            if (!apiKey) continue; // Should not happen if numKeys > 0
-
-            try {
-                const result = await this.generateImageWithGemini(enhancedPrompt, config, apiKey, characters);
-                return result; // Success, so return
-            } catch (error) {
-                console.error(`Gemini generation failed with key index ${this.geminiKeyIndex === 0 ? numKeys - 1 : this.geminiKeyIndex - 1}:`, error);
-                if (i === numKeys - 1) {
-                    // Last key failed, re-throw the error
-                    throw error;
-                }
-                // Otherwise, the loop will continue with the next key
-            }
-        }
-        throw new Error('All Gemini API keys failed.');
+        return await this.generateImageWithGemini(enhancedPrompt, config, characters);
       } else if (currentModel === 'huggingface') {
         if (!this.apiKeys.huggingface) {
           throw new Error('HuggingFace API key is required. Please configure your API key.');
         }
-        const result = await this.generateImageWithHuggingFace(enhancedPrompt);
-        return result;
+        return await this.generateImageWithHuggingFace(enhancedPrompt);
       } else {
         // Pollinations.ai models (flux, kontext, turbo, gptimage, pollinations)
-        const result = await this.generateImageWithPollinations(enhancedPrompt, config);
-        return result;
+        return await this.generateImageWithPollinations(enhancedPrompt, config);
       }
     } catch (error) {
       console.error(`Image generation failed with ${currentModel}:`, error);
@@ -124,54 +141,41 @@ export class ComicGeneratorAPI {
   }
 
   // Gemini image generation using Google GenAI
-  private async generateImageWithGemini(prompt: string, config: ComicConfig, apiKey: string, characters?: Character[]): Promise<string> {
+  private async generateImageWithGemini(prompt: string, config: ComicConfig, characters?: Character[]): Promise<string> {
+    return this._callGeminiWithRetry(async (apiKey) => {
+        const genAI = new GoogleGenAI({ apiKey });
+        const chat = genAI.chats.create({
+            model: 'gemini-2.0-flash-preview-image-generation',
+            config: { responseModalities: [Modality.TEXT, Modality.IMAGE] },
+            history: [],
+        });
 
-    try {
-      const genAI = new GoogleGenAI({ apiKey });
-      // Create a chat for image generation
-      const chat = genAI.chats.create({
-        model: 'gemini-2.0-flash-preview-image-generation',
-        config: {
-          responseModalities: [Modality.TEXT, Modality.IMAGE],
-        },
-        history: [],
-      });
+        const messageParts: (string | { inlineData: { data: string, mimeType: string }})[] = [{ text: prompt }];
 
-      const messageParts: (string | { inlineData: { data: string, mimeType: string }})[] = [{ text: prompt }];
-
-      if (characters && characters.length > 0) {
-        for (const char of characters) {
-          if (prompt.toLowerCase().includes(char.name.toLowerCase()) && (char.images.length > 0 || (char.previewImages && char.previewImages.length > 0))) {
-            const refImages = (char.previewImages && char.previewImages.length > 0) ? char.previewImages : char.images;
-            for (const imgDataUrl of refImages) {
-              const base64Data = imgDataUrl.split(',')[1];
-              messageParts.push({ inlineData: { data: base64Data, mimeType: 'image/png' } });
+        if (characters && characters.length > 0) {
+            for (const char of characters) {
+                if (prompt.toLowerCase().includes(char.name.toLowerCase()) && (char.images.length > 0 || (char.previewImages && char.previewImages.length > 0))) {
+                    const refImages = (char.previewImages && char.previewImages.length > 0) ? char.previewImages : char.images;
+                    for (const imgDataUrl of refImages) {
+                        const base64Data = imgDataUrl.split(',')[1];
+                        messageParts.push({ inlineData: { data: base64Data, mimeType: 'image/png' } });
+                    }
+                }
             }
-          }
         }
-      }
 
-      // Extract image from response stream
-      const result = await chat.sendMessageStream({ message: messageParts });
-      for await (const chunk of result) {
-        for (const candidate of chunk.candidates) {
-          for (const part of candidate.content.parts ?? []) {
-            if (part.inlineData) {
-              const data = part.inlineData;
-              if (data && data.data) {
-                // Return as data URL
-                return `data:image/png;base64,${data.data}`;
-              }
+        const result = await chat.sendMessageStream({ message: messageParts });
+        for await (const chunk of result) {
+            for (const candidate of chunk.candidates) {
+                for (const part of candidate.content.parts ?? []) {
+                    if (part.inlineData?.data) {
+                        return `data:image/png;base64,${part.inlineData.data}`;
+                    }
+                }
             }
-          }
         }
-      }
-
-      throw new Error('No image generated by Gemini');
-    } catch (error) {
-      console.error('Gemini image generation failed:', error);
-      throw error;
-    }
+        throw new Error('No image generated by Gemini in response stream.');
+    });
   }
 
   // Analyze story and generate comic script using selected AI model
@@ -210,25 +214,15 @@ export class ComicGeneratorAPI {
 
   // Gemini text API call
   private async callGeminiTextAPI(prompt: string): Promise<string> {
-    const apiKey = this.getNextGeminiKey();
-    if (!apiKey) throw new Error('Gemini API key not set');
-
-    try {
-      const genAI = new GoogleGenAI({ apiKey });
-      
-      // Create a chat for text generation
-      // Use a capable model for this task
-      const chat = genAI.chats.create({
-        model: 'gemini-2.0-flash-preview',
-        history: [],
-      });
-
-      const result = await chat.sendMessage({ message: prompt });
-      return result.text;
-    } catch (error) {
-      console.error('Gemini text API failed:', error);
-      throw new Error('Failed to generate script with Gemini');
-    }
+    return this._callGeminiWithRetry(async (apiKey) => {
+        const genAI = new GoogleGenAI({ apiKey });
+        const chat = genAI.chats.create({
+            model: 'gemini-2.0-flash-preview',
+            history: [],
+        });
+        const result = await chat.sendMessage({ message: prompt });
+        return result.text;
+    });
   }
 
   // Basic story conversion for non-Gemini models
@@ -312,7 +306,8 @@ ${script}`;
       const pageNumber = Math.floor(i / config.panelCount) + 1;
       const panelNumber = (i % config.panelCount) + 1;
       
-      onProgress?.(i + 1, panels.length, `Generating page ${pageNumber}, panel ${panelNumber} using ${config.imageAI}...`);
+      onProgress?.(i, panels.length, `Generating page ${pageNumber}, panel ${panelNumber} using ${config.imageAI}...`);
+      
       try {
         const imageUrl = await this.generateImage(panel.sceneDescription, config, characters);
         const promptUsed = this.buildImagePrompt(panel.sceneDescription, config, characters);
@@ -328,9 +323,10 @@ ${script}`;
         
       } catch (error) {
         console.error(`Failed to generate panel ${i + 1}:`, error);
+        const errorMessage = error instanceof Error ? error.message : "An unknown error occurred.";
         generatedPanels.push({
           ...panel,
-          error: `Failed to generate image using ${config.imageAI}`
+          error: `Generation Failed: ${errorMessage}`
         });
       }
     }
@@ -494,61 +490,33 @@ ${script}`;
 
   // Generate character preview using Gemini 2.0 Flash Image Generation with image input
   async generateCharacterPreview(referenceImageData: string, description: string, style?: string): Promise<string> {
-    const apiKey = this.getNextGeminiKey();
-    if (!apiKey) throw new Error('No valid Gemini API key available.');
-    
-    try {
-      const genAI = new GoogleGenAI({ apiKey });
-      
-      // Create a chat for image generation
-      const chat = genAI.chats.create({
-        model: 'gemini-2.0-flash-preview-image-generation',
-        config: {
-          responseModalities: [Modality.TEXT, Modality.IMAGE],
-        },
-        history: [],
-      });
+    return this._callGeminiWithRetry(async (apiKey) => {
+        const genAI = new GoogleGenAI({ apiKey });
+        const chat = genAI.chats.create({
+            model: 'gemini-2.0-flash-preview-image-generation',
+            config: { responseModalities: [Modality.TEXT, Modality.IMAGE] },
+            history: [],
+        });
 
-      // Extract base64 data from data URL
-      const base64Data = referenceImageData.split(',')[1];
-      const stylePrompt = style ? ` in ${style} comic book style` : ' in comic book style';
-      
-      const prompt = `Re-draw this character based on the provided image and description, but in your own artistic interpretation for a comic book. **Strictly maintain all key features, clothing, and colors from the reference image.** The goal is to see how you, the AI, would draw this character for a comic. Description: ${description}. The final image must be a high-quality, detailed character portrait suitable for a comic book.${stylePrompt}`;
+        const base64Data = referenceImageData.split(',')[1];
+        const stylePrompt = style ? ` in ${style} comic book style` : ' in comic book style';
+        const prompt = `Re-draw this character based on the provided image and description, but in your own artistic interpretation for a comic book. **Strictly maintain all key features, clothing, and colors from the reference image.** The goal is to see how you, the AI, would draw this character for a comic. Description: ${description}. The final image must be a high-quality, detailed character portrait suitable for a comic book.${stylePrompt}`;
 
-      const result = await chat.sendMessageStream({
-        message: [
-          {
-            text: prompt
-          },
-          {
-            inlineData: {
-              data: base64Data,
-              mimeType: 'image/png'
+        const result = await chat.sendMessageStream({
+            message: [{ text: prompt }, { inlineData: { data: base64Data, mimeType: 'image/png' } }]
+        });
+
+        for await (const chunk of result) {
+            for (const candidate of chunk.candidates) {
+                for (const part of candidate.content.parts ?? []) {
+                    if (part.inlineData?.data) {
+                        return `data:image/png;base64,${part.inlineData.data}`;
+                    }
+                }
             }
-          }
-        ]
-      });
-
-      // Extract image from response stream
-      for await (const chunk of result) {
-        for (const candidate of chunk.candidates) {
-          for (const part of candidate.content.parts ?? []) {
-            if (part.inlineData) {
-              const data = part.inlineData;
-              if (data && data.data) {
-                // Return as data URL
-                return `data:image/png;base64,${data.data}`;
-              }
-            }
-          }
         }
-      }
-
-      throw new Error('No character preview generated by Gemini');
-    } catch (error) {
-      console.error('Character preview generation failed:', error);
-      throw error;
-    }
+        throw new Error('No character preview generated by Gemini');
+    });
   }
 
   private getImageDimensions(aspectRatio: string): { width: number; height: number } {
